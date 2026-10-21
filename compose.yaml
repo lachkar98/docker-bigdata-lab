@@ -1,0 +1,284 @@
+name: bigdata-amd64
+x-common:
+  image: hadoop-amd64-lab:3.4.3
+  platform: linux/amd64
+  build: &id001
+    context: .
+    dockerfile: Dockerfile.hadoop
+    args:
+      JAVA_VERSION: '8'
+  init: false
+  stop_grace_period: 30s
+  networks: &id002
+  - hadoop
+  environment: &id003
+    LANG: C.UTF-8
+services:
+  namenode:
+    image: bigdata-hadoop:3.4.3-java8
+    platform: linux/amd64
+    build: *id001
+    init: false
+    stop_grace_period: 30s
+    networks: *id002
+    environment: *id003
+    hostname: namenode
+    command:
+    - namenode
+    mem_limit: 768m
+    cpus: 1.5
+    volumes:
+    - nn:/data/nn
+    ports:
+    - 127.0.0.1:9870:9870
+    healthcheck:
+      test:
+      - CMD
+      - curl
+      - -fsS
+      - http://localhost:9870/
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+  datanode1:
+    image: bigdata-hadoop:3.4.3-java8
+    platform: linux/amd64
+    build: *id001
+    init: false
+    stop_grace_period: 30s
+    networks: *id002
+    environment: *id003
+    hostname: datanode1
+    command:
+    - datanode
+    mem_limit: 640m
+    cpus: 1.5
+    volumes:
+    - dn1:/data/dn
+    depends_on:
+      namenode:
+        condition: service_healthy
+  datanode2:
+    image: bigdata-hadoop:3.4.3-java8
+    platform: linux/amd64
+    build: *id001
+    init: false
+    stop_grace_period: 30s
+    networks: *id002
+    environment: *id003
+    hostname: datanode2
+    command:
+    - datanode
+    mem_limit: 640m
+    cpus: 1.5
+    volumes:
+    - dn2:/data/dn
+    depends_on:
+      namenode:
+        condition: service_healthy
+  resourcemanager:
+    image: bigdata-hadoop:3.4.3-java8
+    platform: linux/amd64
+    build: *id001
+    init: false
+    stop_grace_period: 30s
+    networks: *id002
+    environment: *id003
+    hostname: resourcemanager
+    command:
+    - resourcemanager
+    mem_limit: 768m
+    cpus: 1.5
+    ports:
+    - 127.0.0.1:8088:8088
+    healthcheck:
+      test:
+      - CMD
+      - curl
+      - -fsS
+      - http://localhost:8088/
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+  nodemanager1:
+    image: bigdata-hadoop:3.4.3-java8
+    platform: linux/amd64
+    build: *id001
+    init: false
+    stop_grace_period: 30s
+    networks: *id002
+    environment: *id003
+    hostname: nodemanager1
+    command:
+    - nodemanager
+    mem_limit: 4g
+    cpus: 1.5
+    volumes:
+    - nm1:/data/nm
+    depends_on:
+      resourcemanager:
+        condition: service_healthy
+  nodemanager2:
+    image: bigdata-hadoop:3.4.3-java8
+    platform: linux/amd64
+    build: *id001
+    init: false
+    stop_grace_period: 30s
+    networks: *id002
+    environment: *id003
+    hostname: nodemanager2
+    command:
+    - nodemanager
+    mem_limit: 4g
+    cpus: 1.5
+    volumes:
+    - nm2:/data/nm
+    depends_on:
+      resourcemanager:
+        condition: service_healthy
+  metastore-db:
+    image: postgres:16-bookworm
+    platform: linux/amd64
+    networks:
+    - hadoop
+    environment:
+      POSTGRES_DB: metastore
+      POSTGRES_USER: hive
+      POSTGRES_PASSWORD: lab-hive-only
+    volumes:
+    - metastore-db:/var/lib/postgresql/data
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - pg_isready -U hive -d metastore
+      interval: 5s
+      timeout: 3s
+      retries: 30
+  hdfs-init:
+    image: bigdata-tools:lab
+    platform: linux/amd64
+    build: &id004
+      context: .
+      dockerfile: Dockerfile.tools
+    networks: &id005
+    - hadoop
+    command:
+    - bash
+    - /opt/extra/hdfs-init.sh
+    depends_on:
+      namenode:
+        condition: service_healthy
+      datanode1:
+        condition: service_started
+      datanode2:
+        condition: service_started
+  metastore-init:
+    image: bigdata-tools:lab
+    platform: linux/amd64
+    build: *id004
+    networks: *id005
+    command:
+    - bash
+    - /opt/extra/schema.sh
+    depends_on:
+      metastore-db:
+        condition: service_healthy
+  metastore:
+    image: bigdata-tools:lab
+    platform: linux/amd64
+    build: *id004
+    networks: *id005
+    command:
+    - /opt/hive/bin/hive
+    - --service
+    - metastore
+    depends_on:
+      metastore-init:
+        condition: service_completed_successfully
+      hdfs-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+      - CMD
+      - python3
+      - /opt/extra/tcp.py
+      - localhost
+      - '9083'
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    mem_limit: 2g
+    hostname: metastore
+  hiveserver2:
+    image: bigdata-tools:lab
+    platform: linux/amd64
+    build: *id004
+    networks: *id005
+    command:
+    - /opt/hive/bin/hiveserver2
+    depends_on:
+      metastore:
+        condition: service_healthy
+      resourcemanager:
+        condition: service_healthy
+      nodemanager1:
+        condition: service_started
+      nodemanager2:
+        condition: service_started
+    ports:
+    - 127.0.0.1:10000:10000
+    - 127.0.0.1:10002:10002
+    healthcheck:
+      test:
+      - CMD
+      - python3
+      - /opt/extra/tcp.py
+      - localhost
+      - '10000'
+      interval: 10s
+      timeout: 5s
+      retries: 40
+    mem_limit: 2g
+  spark-client:
+    image: bigdata-tools:lab
+    platform: linux/amd64
+    build: *id004
+    networks: *id005
+    command:
+    - sleep
+    - infinity
+    depends_on:
+      metastore:
+        condition: service_healthy
+      resourcemanager:
+        condition: service_healthy
+    mem_limit: 2g
+  hue:
+    profiles:
+    - hue
+    image: ${HUE_IMAGE:-bigdata-hue:amd64}
+    platform: ${HUE_PLATFORM:-linux/amd64}
+    networks:
+    - hadoop
+    ports:
+    - 127.0.0.1:8888:8888
+    volumes:
+    - ./config/hue.ini:/usr/share/hue/desktop/conf/z-lab.ini:ro
+    - hue-data:/var/lib/hue
+    depends_on:
+      hiveserver2:
+        condition: service_healthy
+    mem_limit: 2g
+networks:
+  hadoop:
+    name: bigdata-amd64-hadoop
+volumes:
+  nn: null
+  dn1: null
+  dn2: null
+  nm1: null
+  nm2: null
+  metastore-db: null
+  hue-data: null

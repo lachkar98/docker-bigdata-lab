@@ -1,0 +1,26 @@
+ARG JAVA_VERSION=8
+FROM eclipse-temurin:${JAVA_VERSION}-jdk-jammy
+ARG TARGETARCH
+ARG HADOOP_VERSION=3.4.3
+RUN test "$TARGETARCH" = amd64
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates tini python3 && rm -rf /var/lib/apt/lists/*
+RUN set -eux; archive="hadoop-${HADOOP_VERSION}.tar.gz"; \
+    base="https://archive.apache.org/dist/hadoop/common/hadoop-${HADOOP_VERSION}"; \
+    curl -fSL --retry 3 "$base/$archive" -o /tmp/hadoop.tar.gz; \
+    curl -fSL --retry 3 "$base/$archive.sha512" -o /tmp/hadoop.sha512; \
+    expected="$(grep -Eo '[[:xdigit:]]{128}' /tmp/hadoop.sha512)"; \
+    test "${#expected}" = 128; \
+    echo "$expected  /tmp/hadoop.tar.gz" | sha512sum -c -; \
+    tar -xzf /tmp/hadoop.tar.gz -C /opt; \
+    mv "/opt/hadoop-${HADOOP_VERSION}" /opt/hadoop; \
+    rm /tmp/hadoop.tar.gz /tmp/hadoop.sha512
+ENV HADOOP_HOME=/opt/hadoop HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
+ENV PATH=/opt/hadoop/bin:/opt/hadoop/sbin:$PATH
+RUN groupadd -g 1000 hadoop && useradd -m -u 1000 -g hadoop hadoop && \
+    mkdir -p /data/nn /data/dn /data/nm/local /data/nm/log /opt/hadoop/logs && \
+    chown -R hadoop:hadoop /data /opt/hadoop/logs
+COPY config/ /opt/hadoop/etc/hadoop/
+COPY --chmod=755 scripts/ /opt/lab/
+USER hadoop
+WORKDIR /home/hadoop
+ENTRYPOINT ["/usr/bin/tini", "--", "/opt/lab/entrypoint.sh"]

@@ -1,0 +1,6 @@
+services:
+  resourcemanager:
+    image: bigdata-resourcemanager-ui2:3.4.3
+    build:
+      context: .
+      dockerfile: Dockerfile.yarn-ui2

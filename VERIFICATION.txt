@@ -1,0 +1,1 @@
+Variante AMD64 : Compose résolu avec profil Hue ; plateformes linux/amd64 ; contrôle Dockerfile TARGETARCH=amd64 ; archive Hadoop standard sans suffixe aarch64. XML et shell hérités de la proposition précédente. Aucun build ni démarrage effectué. Hue et Ranger restent non validés.

@@ -1,0 +1,25 @@
+# Build only the official UI module; do not replace Hadoop server libraries.
+FROM eclipse-temurin:8-jdk-jammy AS ui-builder
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends maven curl ca-certificates git python3 make g++ && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+RUN set -eux; \
+ base=https://archive.apache.org/dist/hadoop/common/hadoop-3.4.3; \
+ curl -fSL --retry 3 "$base/hadoop-3.4.3-src.tar.gz.sha512" -o source.sha512; \
+ expected="$(grep -Eo '[[:xdigit:]]{128}' source.sha512)"; test "${#expected}" = 128; \
+ curl -fSL --retry 3 "$base/hadoop-3.4.3-src.tar.gz" -o source.tgz; \
+ echo "$expected  source.tgz" | sha512sum -c -; \
+ tar -xzf source.tgz --strip-components=1; rm source.tgz source.sha512
+# Old optional PhantomJS dependencies can leave dangling bin links that
+# Broccoli attempts to stat during the production build. Remove only these
+# broken links immediately before Ember runs; valid executables stay intact.
+RUN python3 -c 'import json; from pathlib import Path; p=Path("hadoop-yarn-project/hadoop-yarn/hadoop-yarn-ui/src/main/webapp/package.json"); d=json.loads(p.read_text()); d["scripts"]["build:mvn"]="find node_modules bower_components -xtype l -name phantomjs -print -delete && "+d["scripts"]["build:mvn"]; p.write_text(json.dumps(d,indent=2)+"\n")'
+# Maven's frontend plugin installs the Node/Yarn versions pinned by Hadoop.
+RUN mvn -B -pl hadoop-yarn-project/hadoop-yarn/hadoop-yarn-ui \
+ -Pyarn-ui -DskipTests -Drat.skip=true -Dcheckstyle.skip package
+RUN test -s /build/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-ui/target/hadoop-yarn-ui-3.4.3.war
+FROM bigdata-hadoop:3.4.3-java8
+USER root
+COPY --from=ui-builder /build/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-ui/target/hadoop-yarn-ui-3.4.3.war /opt/yarn-ui2/hadoop-yarn-ui-3.4.3.war
+RUN python3 -c 'import xml.etree.ElementTree as E; p="/opt/hadoop/etc/hadoop/yarn-site.xml"; t=E.parse(p); r=t.getroot(); values={"yarn.webapp.ui2.enable":"true","yarn.webapp.ui2.war-file-path":"/opt/yarn-ui2/hadoop-yarn-ui-3.4.3.war"}; [(r.remove(q)) for q in list(r) if q.findtext("name") in values]; [(E.SubElement(q,"name").__setattr__("text",k),E.SubElement(q,"value").__setattr__("text",v)) for k,v in values.items() for q in [E.SubElement(r,"property")]]; t.write(p)'
+USER hadoop

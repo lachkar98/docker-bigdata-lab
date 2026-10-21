@@ -1,0 +1,42 @@
+FROM bigdata-hadoop:3.4.3-java8
+USER root
+ARG HIVE_VERSION=3.1.3
+ARG SPARK_VERSION=3.5.6
+# Hive publishes SHA-256; fetch the checksum before the large archive.
+RUN set -eux; \
+ base="https://archive.apache.org/dist/hive/hive-${HIVE_VERSION}"; \
+ name="apache-hive-${HIVE_VERSION}-bin.tar.gz"; \
+ curl -fSL --retry 3 "$base/$name.sha256" -o /tmp/hive.sha256; \
+ expected="$(grep -Eo '[[:xdigit:]]{64}' /tmp/hive.sha256)"; test "${#expected}" = 64; \
+ curl -fSL --retry 3 "$base/$name" -o /tmp/hive.tgz; \
+ echo "$expected  /tmp/hive.tgz" | sha256sum -c -; \
+ tar -xzf /tmp/hive.tgz -C /opt; mv /opt/apache-hive-${HIVE_VERSION}-bin /opt/hive; \
+ rm /tmp/hive.tgz /tmp/hive.sha256
+# A separate layer preserves Hive if the Spark download fails.
+RUN set -eux; \
+ base="https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}"; \
+ name="spark-${SPARK_VERSION}-bin-hadoop3.tgz"; \
+ curl -fSL --retry 3 "$base/$name.sha512" -o /tmp/spark.sha512; \
+ expected="$(grep -Eo '[[:xdigit:]]{128}' /tmp/spark.sha512)"; test "${#expected}" = 128; \
+ curl -fSL --retry 3 "$base/$name" -o /tmp/spark.tgz; \
+ echo "$expected  /tmp/spark.tgz" | sha512sum -c -; \
+ tar -xzf /tmp/spark.tgz -C /opt; mv /opt/spark-${SPARK_VERSION}-bin-hadoop3 /opt/spark; \
+ rm /tmp/spark.tgz /tmp/spark.sha512
+# Hive 3's older Guava conflicts with newer Hadoop.
+RUN rm /opt/hive/lib/guava-*.jar && cp /opt/hadoop/share/hadoop/common/lib/guava-*.jar /opt/hive/lib/ && \
+ rm -f /opt/hive/lib/postgresql*.jar && \
+ curl -fSL https://repo.maven.apache.org/maven2/org/postgresql/postgresql/42.7.5/postgresql-42.7.5.jar -o /opt/hive/lib/postgresql.jar && \
+ mkdir -p /opt/hive/logs /opt/spark/logs && chown -R hadoop:hadoop /opt/hive /opt/spark
+# Hive 3 requires the legacy commons.collections package (Collections 4 differs).
+RUN curl -fSL --retry 3 \
+ https://repo.maven.apache.org/maven2/commons-collections/commons-collections/3.2.2/commons-collections-3.2.2.jar \
+ -o /opt/hive/lib/commons-collections-3.2.2.jar && \
+ jar tf /opt/hive/lib/commons-collections-3.2.2.jar | grep -Fx 'org/apache/commons/collections/CollectionUtils.class'
+ENV HIVE_HOME=/opt/hive SPARK_HOME=/opt/spark HIVE_CONF_DIR=/opt/hive/conf
+ENV PATH=/opt/spark/bin:/opt/hive/bin:$PATH
+COPY config/hive-site.xml /opt/hive/conf/hive-site.xml
+COPY config/spark-hive-site.xml /opt/spark/conf/hive-site.xml
+COPY config/spark-defaults.conf /opt/spark/conf/spark-defaults.conf
+COPY scripts/ /opt/extra/
+USER hadoop
+ENTRYPOINT ["/usr/bin/tini", "--"]
